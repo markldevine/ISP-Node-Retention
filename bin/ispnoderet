@@ -1,0 +1,70 @@
+#!/usr/bin/env raku
+
+use ISP::dsmadmc;
+use KHPH;
+use Data::Dump::Tree;
+#use Grammar::Debugger;
+
+my %nodes;
+class Node-Info {
+    has $.CONTACT;
+    has $.EMAIL_ADDRESS;
+    has $.LOCKED;
+    has $.NODEGROUP;
+    has $.REPLICATION_PRIMARY_SERVER;
+    has $.LAST_REPLICATED_TO_SERVER;
+}
+
+my %admins;
+class Admin-Info {
+    has $.CONTACT;
+    has $.EMAIL_ADDRESS;
+    has $.LOCKED;
+    has $.CLIENT_OWNER;
+    has $.PASSEXP;
+}
+
+sub MAIN (
+#   Str:D   :$isp-node-name!,                   #= ISP client name (SELECT NODE_NAME FROM NODES)
+    Str:D   :$isp-server!,                      #= ISP server name (SELECT SERVER_NAME FROM STATUS)
+    Str:D   :$isp-admin!,                       #= ISP server Admin account
+    Bool    :$cache                             #= Read from cache
+) {
+    my ISP::dsmadmc $dsmadmc   .= new(:$isp-server, :$isp-admin, :$cache);
+
+#   my $node-info               = $dsmadmc.execute(['SELECT', 'NODE_NAME,SESSION_SECURITY,NODEGROUP', 'FROM', 'NODES', 'WHERE', 'NODE_NAME=' ~ q|'| ~ $NODE_NAME ~ q|'|]);
+    for $dsmadmc.execute(['SELECT', 'NODE_NAME,CONTACT,EMAIL_ADDRESS,LAST_REPLICATED_TO_SERVER,LOCKED,NODEGROUP,REPLICATION_PRIMARY_SERVER', 'FROM', 'NODES']) -> $node-record {
+        my $node-name           = $node-record<NODE_NAME>;
+        %nodes{$node-name}      = Node-Info.new(
+                                    :CONTACT($node-record<CONTACT>),
+                                    :EMAIL_ADDRESS($node-record<EMAIL_ADDRESS>),
+                                    :LOCKED($node-record<LOCKED>),
+                                    :REPLICATION_PRIMARY_SERVER($node-record<REPLICATION_PRIMARY_SERVER>),
+                                    :LAST_REPLICATED_TO_SERVER($node-record<LAST_REPLICATED_TO_SERVER>),
+                                    :NODEGROUP($node-record<NODEGROUP>),
+                                  );
+    }
+#ddt %nodes;
+    for $dsmadmc.execute(['SELECT', 'ADMIN_NAME,CONTACT,EMAIL_ADDRESS,LOCKED,CLIENT_OWNER,PASSEXP', 'FROM', 'ADMINS']) -> $admin-record {
+        my $admin-name          = $admin-record<ADMIN_NAME>;
+        %admins{$admin-name}    = Admin-Info.new(
+                                    :CONTACT($admin-record<CONTACT>),
+                                    :EMAIL_ADDRESS($admin-record<EMAIL_ADDRESS>),
+                                    :LOCKED($admin-record<LOCKED>),
+                                    :CLIENT_OWNER($admin-record<CLIENT_OWNER>),
+                                    :PASSEXP($admin-record<PASSEXP>),
+                                  );
+    }
+#ddt %admins;
+    for %nodes.keys -> $node {
+        next if %admins{$node}:exists && %admins{$node}.CLIENT_OWNER eq $node && %admins{$node}.PASSEXP.Int == 0;
+        put 'REGISTER ADMIN ' ~ $node ~ ' ' ~ KHPH.new(:stash-path($*HOME ~ '/.' ~ $*PROGRAM-NAME.IO.basename ~ '/defaults/' ~ $isp-server ~ '/NODE/password.khph')).expose ~ ' CONTACT="' ~ %nodes{$node}.CONTACT ~ '" EMAILADDRESS="' ~ %nodes{$node}.EMAIL_ADDRESS ~ '" PASSEXP=0';
+        put 'GRANT AUTHORITY ' ~ $node ~ ' CL=NODE AUTH=OWNER NODE=' ~ $node;
+    }
+    for %nodes.keys -> $node {
+        next if %nodes{$node}.LOCKED eq 'NO';
+        put 'UNLOCK NODE ' ~ $node;
+    }
+}
+
+=finish
